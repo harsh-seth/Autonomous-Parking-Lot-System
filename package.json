@@ -1,0 +1,23 @@
+{
+  "name": "autonomous-parking-lot-system",
+  "version": "1.0.0",
+  "description": "A system to automate the process of assigning a spot in a parking lot, monitoring the duration parked and collecting the amount due via electronic payments methods",
+  "main": "server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/harsh-seth/Autonomous-Parking-Lot-System.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/harsh-seth/Autonomous-Parking-Lot-System/issues"
+  },
+  "homepage": "https://github.com/harsh-seth/Autonomous-Parking-Lot-System#readme",
+  "dependencies": {
+    "express": "^4.16.4"
+  }
+}
