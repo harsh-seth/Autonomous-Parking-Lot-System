@@ -61,3 +61,5 @@ typings/
 .next
 
 .eslintrc.js
+
+.vscode
