@@ -1,7 +1,7 @@
 {
   "name": "autonomous-parking-lot-system",
   "version": "1.0.0",
-  "description": "A system to automate the process of assigning a spot in a parking lot, monitoring the duration parked and collecting the amount due via electronic payments methods",
+  "description": "A system to \r + automate the process of assigning a spot in a parking lot\r + monitoring the duration parked\r + collecting the amount due via electronic payments methods\r + providing customers with easily accesible data of their parkings\r + providing parking lot owners with easily accesible data of their parking lots",
   "main": "server.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",

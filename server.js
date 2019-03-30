@@ -19,14 +19,19 @@ const validators = {
     },
     'signup': {
         'username': joi.string().required(),
-        'password': joi.string().required().length(4),
+        'password': joi.string().required().min(6).max(14),
         'name': joi.string().required(),
+        'phone_no': joi.string().length(10).required()
     },
     'createAdmin': {
         'auth_token': auth_token_authenticator,
         'username': joi.string().required(),
-        'password': joi.string().required().length(4),
+        'password': joi.string().required().min(6).max(14),
         'name': joi.string().required(),
+    },
+    'changePassword': {
+        'auth_token': auth_token_authenticator,
+        'newPassword': joi.string().required().min(6).max(14)
     }
 }
 
@@ -34,6 +39,7 @@ const messages = {
     'invalidURL': 'Invalid URL!',
     'invalidUser': 'No user found with that username!',
     'invalidPassword': 'The user-password combination does not match!',
+    'invalidParams': 'Invalid or missing parameters!',
     'userTaken': 'The username given is already in use. Select a different one',
     'signupClientOK': 'User registered!',
     'signupAdminOK': 'Admin registered!',
@@ -43,19 +49,25 @@ const messages = {
     'genError': 'Whoops something went wrong!',
     'loginOK': 'Signed in!',
     'logoutOK': 'Logged out successfully!',
-    'authOK': 'This user is logged in. Authentication works!'
+    'authOK': 'This user is logged in. Authentication works!',
+    'pwChangedOK': 'Password changed successfully',
+    'deregisterOK': 'User removed from database. Past records will be maintained, but this action cannot be reverted.',
+    'opOK': 'The operation was successful.'
 }
 
 const authClientEndpointsList = [
-    '/registerAdmin', 
     '/logout', 
-    '/test'
+    '/test',
+    '/changePassword',
+    '/deregisterClient',
+    '/getBookingDetails'
 ]
 
 const authAdminEndpointsList = [
     '/registerAdmin',
     '/logout',
-    '/test'
+    '/test',
+    '/changePassword'
 ]
 
 const nonAuthEndpointsList = [
@@ -66,22 +78,90 @@ const nonAuthEndpointsList = [
 
 var user_details = {
     'admin': {
-        'password': '1234',
-        'isAdmin': true
+        'password': 'admin1234',
+        'isAdmin': true,
+        'phone_number': "98765443210"
     }
 }
 
 var sessions = {}
 
+var lot_details = {
+    1: {
+        'name': "ACME Parking Lot 1",
+        'location': 'VIT',
+        'spots': {
+            1: {
+                'size': 'small',
+            }
+        }
+    }
+}
+
+/*
+    {
+        bookingID {
+            username: USERNAME,
+            lotID: LOTID,
+            placeID: PLACEID,
+            dateTimeOfBooking: DATE,
+            dateTimeOfExit: DATE
+        }
+    }
+*/
+var bookings = {
+    2: {
+        'username': "harsh",
+        'lotID': 1,
+        'placeID': 1,
+        'dateTimeOfBooking': new Date()
+    }
+}
+
+/*
+    {
+        username: [
+            bookingID: {
+                amount: AMOUNT,
+                resolved: BOOLEAN,
+                resolutionDetails: undefined / {
+                    transactionID: TRANSACTIONID,
+                    vendor: VENDOR,
+                    mode: MODE,
+                    dateOfResolution: DATE
+                }
+            }
+        ]
+    }
+*/
+var payments = {}
+
 function generateAuthToken() {
-    return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+    return Math.random().toString(36).padEnd(15, '0').substring(2, 15) + Math.random().toString(36).padEnd(15, '0').substring(2, 15);
+}
+
+function getCurrentBookings(username) {
+    var currentBookings = []
+    for (var bookingID in bookings) {
+        if(bookings[bookingID]['username'] === username && bookings[bookingID]['dateTimeOfExit'] === undefined) {
+            currentBookings.push({
+                'bookingID': bookingID,
+                'booking_details': bookings[bookingID],
+                'lotID': bookings[bookingID]['lotID'],
+                'lot_details': lot_details[bookings[bookingID]['lotID']],
+                'slotID': bookings[bookingID]['slotID'],
+                'slot_details': lot_details[bookings[bookingID]['lotID']][bookings[bookingID]['slotID']]
+            })
+        }
+    }
+    return currentBookings
 }
 
 app.use((req, res, next) => {
     var auth_validator = joi.object(validators['authorized']).unknown() 
     const result = auth_validator.validate(req.body)
     
-    if(req.url === '/' || req.url === '/home') {
+    if(req.url === '/') {
         // not needing authentication (or to provide help text to unauthorized users)
         if (result.error) {
             // help text
@@ -98,11 +178,19 @@ app.use((req, res, next) => {
         var response_body = {}
         if(result.error) {
             // if unauthorized
-            response_body = {
-                'message': messages['missingAuth'],
-                'status': 'missingAuth'
+            if(req.body.auth_token) {
+                response_body = {
+                    'message': messages['invalidAuth'],
+                    'status': 'invalidAuth'
+                }
+            } else {
+
+                response_body = {
+                    'message': messages['missingAuth'],
+                    'status': 'missingAuth'
+                }
+                return res.send(response_body)
             }
-            return res.send(response_body)
         } else {
             // if trying to authenticate
             if (!(result.value.auth_token in sessions)) {
@@ -137,14 +225,21 @@ app.post('/', (req, res) => {
 app.post('/registerClient', (req, res) => {
     // validate body contents
     const result = joi.validate(req.body, validators['signup'])
+    console.log('attempting to signup')
 
     // check if validation fails 
     if (result.error) {
-        res.status(400).send({'message': result.error.details[0].message})
+        res.send({
+            'message': result.error.details[0].message,
+            'status': 'invalidParams'
+        })
     } else {
         const username = result.value.username
         const password = result.value.password
         const name = result.value.name
+        const phone_no = result.value.phone_no
+
+        console.log(username, password, name, phone_no)
 
         var response_body = {}
         if (username in user_details) {
@@ -154,11 +249,11 @@ app.post('/registerClient', (req, res) => {
             user_details[username] = {
                 'password': password,
                 'name': name,
-                'isAdmin': false
+                'isAdmin': false,
+                'phone_no': phone_no
             }
-            
-            response_body['message'] = messages['signupOK']
-            response_body['status'] = 'signupOK'
+            response_body['message'] = messages['signupClientOK']
+            response_body['status'] = 'signupClientOK'
         }
         res.send(response_body)
     }
@@ -170,7 +265,10 @@ app.post('/registerAdmin', (req, res) => {
 
     // check if validation fails 
     if (result.error) {
-        res.status(400).send({'message': result.error.details[0].message})
+        res.send({
+            'message': result.error.details[0].message,
+            'status': 'invalidParams'
+        })
     } else {
         var response_body = {}
         if (!user_details[sessions[result.value.auth_token]]['isAdmin']) {
@@ -191,8 +289,8 @@ app.post('/registerAdmin', (req, res) => {
                     'isAdmin': true
                 }
                 
-                response_body['message'] = messages['signupOK']
-                response_body['status'] = 'signupOK'
+                response_body['message'] = messages['signupAdminOK']
+                response_body['status'] = 'signupAdminOK'
             }
         }
         res.send(response_body)
@@ -202,10 +300,12 @@ app.post('/registerAdmin', (req, res) => {
 app.post('/authenticate', (req, res) => {
     // validate body contents
     const result = joi.validate(req.body, validators['login'])
-    
     // check if validation fails 
     if (result.error) {
-        res.status(400).send({'message': result.error.details[0].message})
+        res.send({
+            'message': result.error.details[0].message,
+            'status': 'invalidParams'
+        })
     } else {
         const username = result.value.username
         const password = result.value.password
@@ -213,7 +313,7 @@ app.post('/authenticate', (req, res) => {
         var response_body = {}
         if (username in user_details) {
             if (user_details[username].password === password) {
-                response_body['message'] = 
+                response_body['message'] = messages['loginOK']
                 response_body['username'] = username
                 response_body['auth_token'] = generateAuthToken()
                 response_body['status'] = 'loginOK'
@@ -242,6 +342,158 @@ app.post('/logout', (req, res) => {
     
     res.send(response_body)
 })
+
+app.post('/changePassword', (req, res) => {
+    // validate body contents
+    const result = joi.validate(req.body, validators['changePassword'])
+    
+    // check if validation fails 
+    if (result.error) {
+        res.send({
+            'message': result.error.details[0].message,
+            'status': 'invalidParams'
+        })
+    } else {
+        const auth_token = result.value.auth_token
+        const newPassword = result.value.newPassword
+
+        user_details[sessions[auth_token]]['password'] = newPassword
+
+        var response_body = {}
+        response_body['message'] = messages['pwChangedOK']
+        response_body['status'] = 'pwChangedOK'
+        res.send(response_body)
+    }
+})
+
+app.post('/deregisterClient', (req, res) => {
+    const auth_token = req.body.auth_token
+    var response_body = {}
+
+    const username = sessions[username]
+
+    if (user_details[username]['isAdmin']) {
+        response_body['message'] = messages['privError']
+        response_body['status'] = 'privError'
+    } else {
+        delete sessions[auth_token]
+        // TODO: Deal with past bookings and payments
+        delete user_details[user_details]
+        
+        response_body['message'] = messages['deregisterOK']
+        response_body['status'] = 'deregisterOK'    
+    }
+    res.send(response_body)
+})
+
+// Client End
+
+app.post('/getBookingDetails', (req, res) => {
+    const auth_token = req.body.auth_token
+    var response_body = {}
+
+    const username = sessions[auth_token]
+
+    if (user_details[username]['isAdmin']) {
+        response_body['message'] = messages['privError']
+        response_body['status'] = 'privError'
+    } else {
+        response_body['message'] = messages['opOK']
+        response_body['status'] = 'opOK'
+        
+        
+        const currentBookings = getCurrentBookings(username)
+    
+        response_body['currentBookings'] = currentBookings
+    }
+    res.send(response_body)
+})
+
+app.post('/getPastBookings', (req, res) => {
+  const auth_token = req.body.auth_token
+  var response_body= {}
+
+  const username = sessions[auth_token]
+  if (user_details[username]['isAdmin']) {
+    response_body['message'] = messages['privError']
+    response_body['status'] = 'privError'
+  } else {
+    response_body['message'] = messages['opOK']
+    response_body['status'] = 'opOK'
+
+    var pastBookings = []
+    for (var bookingID in bookings) {
+        // THIS WILL GET ALL BOOKINGS, INCLUDING CURRENT ONES
+        if(bookings[bookingID]['username'] === username) {
+            pastBookings.push({
+                'bookingID': bookingID,
+                'booking_details': bookings[bookingID],
+                'lotID': bookings[bookingID]['lotID'],
+                'lot_details': lot_details[bookings[bookingID]['lotID']],
+                'slotID': bookings[bookingID]['slotID'],
+                'slot_details': lot_details[bookings[bookingID]['lotID']][bookings[bookingID]['slotID']]
+            })
+        }
+    }
+    response_body['pastBookings'] = pastBookings
+  }
+  res.send(response_body)
+})
+
+// Operations End
+// getCurrentStatus
+app.post('/getCurrentStatus', (req, res) => {
+    var auth_token = req.body.auth_token
+    var client_username = req.body.client_username
+    var lotID = req.body.lotID
+
+    if (auth_token && client_username) {
+        if (user_details[sessions[auth_token]]['isAdmin']) {
+            if (client_username in user_details) {
+                // Check if user has any active bookings
+                const currentBookings = getCurrentBookings(client_username)
+                var currentSpots = []
+                for (var i =0 ; i<currentBookings.length; i++) {
+                    if (currentBookings[i]['lotID'] == lotID) {
+                        // TODO: FIX THIS
+                        currentSpots.push(bookings[currentBookings[i]])
+                    }
+                }
+                res.send({
+                    'currentBookings': currentBookings,
+                    'status': 'opOK',
+                    'message': messages['opOK']
+                })
+            } else {
+                res.send({
+                    'message': messages['invalidUser'],
+                    'status': 'invalidUser'
+                })
+            }
+        } else {
+            res.send({
+                'message': messages['privError'],
+                'status': 'privError'
+            })
+        }
+    } else {
+        res.send({
+        'message': messages['invalidParams'],
+        'status': 'invalidParams'
+        })
+    }
+})
+
+// allocateParking
+// freeParking
+
+// Admin End
+// registerBuilding
+// registerLots
+// getBuildings
+// getLots
+// getCurrentBuildingStatus
+// getBuildingLogs
 
 app.post('/test', (req, res) => {
     var response_body = {}
