@@ -32,6 +32,11 @@ const validators = {
     'changePassword': {
         'auth_token': auth_token_authenticator,
         'newPassword': joi.string().required().min(6).max(14)
+    },
+    'lotRequest': {
+        'auth_token': auth_token_authenticator,
+        'client_username': joi.string().required(),
+        'lotID': joi.number().integer().required()
     }
 }
 
@@ -80,7 +85,12 @@ var user_details = {
     'admin': {
         'password': 'admin1234',
         'isAdmin': true,
-        'phone_number': "98765443210"
+        'phone_no': "98765443210"
+    },
+    'client': {
+        'password': 'client1234',
+        'isAdmin': false,
+        'phone_no': "9876543210" 
     }
 }
 
@@ -110,8 +120,8 @@ var lot_details = {
     }
 */
 var bookings = {
-    2: {
-        'username': "harsh",
+    1: {
+        'username': "client",
         'lotID': 1,
         'placeID': 1,
         'dateTimeOfBooking': new Date()
@@ -225,7 +235,6 @@ app.post('/', (req, res) => {
 app.post('/registerClient', (req, res) => {
     // validate body contents
     const result = joi.validate(req.body, validators['signup'])
-    console.log('attempting to signup')
 
     // check if validation fails 
     if (result.error) {
@@ -238,8 +247,6 @@ app.post('/registerClient', (req, res) => {
         const password = result.value.password
         const name = result.value.name
         const phone_no = result.value.phone_no
-
-        console.log(username, password, name, phone_no)
 
         var response_body = {}
         if (username in user_details) {
@@ -443,24 +450,31 @@ app.post('/getPastBookings', (req, res) => {
 // Operations End
 // getCurrentStatus
 app.post('/getCurrentStatus', (req, res) => {
-    var auth_token = req.body.auth_token
-    var client_username = req.body.client_username
-    var lotID = req.body.lotID
-
-    if (auth_token && client_username) {
+    
+    var result = joi.validate(req.body, validators['lotRequest'])
+    
+    if(result.error) {
+        res.send({
+            'message': result.error.details[0].message,
+            'status': 'invalidParams'
+        })
+    } else {
+        var auth_token = req.body.auth_token
+        var client_username = req.body.client_username
+        var lotID = req.body.lotID
+        
         if (user_details[sessions[auth_token]]['isAdmin']) {
             if (client_username in user_details) {
                 // Check if user has any active bookings
                 const currentBookings = getCurrentBookings(client_username)
                 var currentSpots = []
                 for (var i =0 ; i<currentBookings.length; i++) {
-                    if (currentBookings[i]['lotID'] == lotID) {
-                        // TODO: FIX THIS
+                    if (currentBookings[i]['lotID'] === lotID) {
                         currentSpots.push(bookings[currentBookings[i]])
                     }
                 }
                 res.send({
-                    'currentBookings': currentBookings,
+                    'currentSpots': currentSpots,
                     'status': 'opOK',
                     'message': messages['opOK']
                 })
@@ -476,15 +490,12 @@ app.post('/getCurrentStatus', (req, res) => {
                 'status': 'privError'
             })
         }
-    } else {
-        res.send({
-        'message': messages['invalidParams'],
-        'status': 'invalidParams'
-        })
     }
 })
 
 // allocateParking
+
+
 // freeParking
 
 // Admin End
@@ -520,5 +531,4 @@ app.post('*', (req, res) => {
     res.send(res_body)
 })
 
-app.listen(portNum)
-console.log("Server is up at", portNum)
+app.listen(portNum, () => console.log("Server is up at", portNum))
