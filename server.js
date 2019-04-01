@@ -40,9 +40,10 @@ const validators = {
         'auth_token': auth_token_authenticator,
         'newPassword': joi.string().required().min(6).max(14)
     },
-    'lotRequest': {
+    'terminalRequest': {
         'auth_token': auth_token_authenticator,
-        'client_auth_token': joi.string().required()
+        'client_auth_token': auth_token_authenticator,
+        'size': joi.number().valid([0, 1, 2]).default(0)
     }
 }
 
@@ -62,6 +63,9 @@ const messages = {
     'authOK': 'This user is logged in. Authentication works!',
     'pwChangedOK': 'Password changed successfully',
     'deregisterOK': 'User removed from database. Past records will be maintained, but this action cannot be reverted.',
+    'noParkingAvailable': 'There are no available parking spots matching your requirements!',
+    'bookParkingOK': 'A parking spot was assigned to you!',
+    'freeParkingOK': 'The parking spot was freed. Thank you for your time',
     'opOK': 'The operation was successful.'
 }
 
@@ -70,7 +74,7 @@ const authClientEndpointsList = [
     '/test',
     '/changePassword',
     '/deregisterClient',
-    '/getBookingDetails',
+    '/getCurrentBookings',
     '/getPastBookings'
 ]
 
@@ -85,7 +89,8 @@ const authTerminalEndpointsList = [
     '/logout',
     '/test',
     '/changePassword',
-    '/getCurrentStatus'
+    '/getCurrentStatus',
+    '/toggleBooking'
 ]
 
 const nonAuthEndpointsList = [
@@ -435,8 +440,7 @@ app.post('/deregisterClient', (req, res) => {
 })
 
 // Client End
-
-app.post('/getBookingDetails', (req, res) => {
+app.post('/getCurrentBookings', (req, res) => {
     const auth_token = req.body.auth_token
     const userID = sessions[auth_token]
     
@@ -499,7 +503,7 @@ app.post('/getPastBookings', (req, res) => {
 // Operations End
 // getCurrentStatus
 app.post('/getCurrentStatus', (req, res) => {
-    var result = joi.validate(req.body, validators['lotRequest'])
+    var result = joi.validate(req.body, validators['terminalRequest']) 
     
     if(result.error) {
         res.send({
@@ -524,7 +528,7 @@ app.post('/getCurrentStatus', (req, res) => {
                     } else {
                         return getCurrentBookingAtLot(sessions[auth_token], sessions[client_auth_token])
                         .then(currentSpots => {
-                            response_body['currentSpots'] = currentSpots
+                            response_body['currentSpots'] = currentSpots[0]
                             response_body['message'] = messages['opOK']
                             response_body['status'] = 'opOK'
                         })
@@ -546,17 +550,112 @@ app.post('/getCurrentStatus', (req, res) => {
 })
 
 // allocateParking
+app.post('/toggleBooking', (req, res) => {
+    const result = joi.validate(req.body, validators['terminalRequest']) 
+    if(result.error) {
+        res.send({
+            'message': result.error.details[0].message,
+            'status': 'invalidParams'
+        })
+    } else {
+        var auth_token = result.value.auth_token
+        var client_auth_token = result.value.client_auth_token
+        var size = result.value.size
+        var userID = sessions[auth_token]
+        
+        var response_body = {}
+        db.User_Details.find({_id: userID})
+        .then(users => {
+            var user = users[0]
+            if (user.role === 'terminal') {
+                return db.User_Details.find({_id: sessions[client_auth_token]})
+                .then(clients => {
+                    if(clients.length === 0) {
+                        response_body['message'] = messages['invalidUser']
+                        response_body['status'] = 'invalidUser'
+                    } else {
+                        return getCurrentBookingAtLot(sessions[auth_token], sessions[client_auth_token])
+                        .then(currentSpots => {
+                            if(currentSpots.length === 0) {
+                                // Book a parking
+                                db.Lot_Details.findOne({user: userID})
+                                .then(lot => {
+                                    return Promise.all([db.Booking_Details.find({lot: lot._id, dateTimeOfExit: undefined}), lot])
+                                })
+                                .then(([bookings, lot]) => {
+                                    switch (size) {
+                                        case 0:
+                                            size = 'Small'
+                                            break;
+                                        case 1:
+                                            size = 'Medium'
+                                            break;
+                                        case 2:
+                                            size = 'Large'
+                                            break;
+                                        default:
+                                            size = 'Medium'
+                                    }
 
-
-// freeParking
+                                    return db.Spot_Details.find({
+                                        lot: lot._id,
+                                        _id: {
+                                            $not: {
+                                                $in: bookings.map(booking => {
+                                                    return booking.spot
+                                                })
+                                            }
+                                        },
+                                        size: size
+                                    })
+                                })
+                                .then(spots => {
+                                    if(spots[0]) {
+                                        response_body['message'] = messages['bookParkingOK'] + " Proceed to " + spots[0].name
+                                        response_body['status'] = 'bookParkingOK'
+                                        db.Booking_Details.create({
+                                            'user': sessions[client_auth_token],
+                                            'lot': spots[0].lot,
+                                            'spot': spots[0]._id,
+                                            'dateTimeOfBooking': new Date()
+                                        })
+                                    } else {
+                                        response_body['message'] = messages['noParkingAvailable']
+                                        response_body['status'] = 'noParkingAvailable'
+                                    }
+                                }).then(() => {
+                                    res.send(response_body)
+                                })
+                            } else {
+                                // Free the parking
+                                currentSpots[0].dateTimeOfExit = new Date()
+                                currentSpots[0].save()
+                                response_body['message'] = messages['freeParkingOK']
+                                response_body['status'] = 'freeParkingOK'
+                                res.send(response_body)
+                            }
+                        })
+                    }
+                })
+            } else {
+                response_body['message'] = messages['privError']
+                response_body['status'] = 'privError'
+                res.send(response_body)
+            }
+        }).catch(err => {
+            response_body['message'] = messages['genError']
+            response_body['status'] = 'genError'
+            res.send(response_body)
+        })
+    }
+})
 
 // Admin End
-// registerBuilding
 // registerLots
-// getBuildings
 // getLots
 // getCurrentBuildingStatus
-// getBuildingLogs
+// getLotLogs
+// getUserHistory
 
 app.post('/test', (req, res) => {
     var response_body = {}
@@ -564,12 +663,7 @@ app.post('/test', (req, res) => {
     
     response_body['message'] = messages['authOK']
     response_body['status'] = 'authOK'
-    response_body['username'] = sessions[auth_token]
-    getCurrentBookingAtLot(sessions[auth_token], sessions[req.body.userTok])
-    .then((currentSpots) => {
-        response_body['currentSpots'] = currentSpots 
-    })
-    .then(() => res.send(response_body))
+    res.send(response_body)
 })
 
 app.get('*', (req, res) => {

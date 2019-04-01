@@ -78,16 +78,16 @@ const booking_details_schema = new Schema({
         ref: 'User_Details',
         required: true
     },
-    'lot': [{
+    'lot': {
         type: ObjectID, 
         ref: 'Lot_Details',
         required: true
-    }],
-    'spot': [{
+    },
+    'spot': {
         type: ObjectID,
         ref: 'Spot_Details',
         required: true
-    }],
+    },
     'dateTimeOfBooking': {
         type: Date,
         required: true
