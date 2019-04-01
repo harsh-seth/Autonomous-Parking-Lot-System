@@ -1,9 +1,14 @@
 const express = require('express')
 const joi = require('joi')
+const async = require('async')
+const db = require('./dbTools/db') 
 
 const app = express()
 app.use(express.json())
 app.use(express.urlencoded({extended: true}))
+
+var connection = db.mongoose.connection
+connection.on('error', console.error.bind(console, "MongoDB Connection Error"))
 
 const portNum = 3000
 
@@ -23,11 +28,13 @@ const validators = {
         'name': joi.string().required(),
         'phone_no': joi.string().length(10).required()
     },
-    'createAdmin': {
+    'signupAuth': {
         'auth_token': auth_token_authenticator,
         'username': joi.string().required(),
         'password': joi.string().required().min(6).max(14),
         'name': joi.string().required(),
+        'role': joi.string().required().valid(['client', 'terminal', 'admin']),
+        'phone_no': joi.string().length(10).required()
     },
     'changePassword': {
         'auth_token': auth_token_authenticator,
@@ -35,8 +42,7 @@ const validators = {
     },
     'lotRequest': {
         'auth_token': auth_token_authenticator,
-        'client_username': joi.string().required(),
-        'lotID': joi.number().integer().required()
+        'client_auth_token': joi.string().required()
     }
 }
 
@@ -46,8 +52,7 @@ const messages = {
     'invalidPassword': 'The user-password combination does not match!',
     'invalidParams': 'Invalid or missing parameters!',
     'userTaken': 'The username given is already in use. Select a different one',
-    'signupClientOK': 'User registered!',
-    'signupAdminOK': 'Admin registered!',
+    'signupOK': 'User registered!',
     'invalidAuth': 'Invalid auth_token!',
     'missingAuth': 'No auth token provided! Obtain an auth_token via `/authenticate`',
     'privError': 'Insufficient privileges to perform that action!',
@@ -65,7 +70,8 @@ const authClientEndpointsList = [
     '/test',
     '/changePassword',
     '/deregisterClient',
-    '/getBookingDetails'
+    '/getBookingDetails',
+    '/getPastBookings'
 ]
 
 const authAdminEndpointsList = [
@@ -75,59 +81,22 @@ const authAdminEndpointsList = [
     '/changePassword'
 ]
 
+const authTerminalEndpointsList = [
+    '/logout',
+    '/test',
+    '/changePassword',
+    '/getCurrentStatus'
+]
+
 const nonAuthEndpointsList = [
     '/', 
     '/registerClient',
     '/authenticate'
 ]
 
-var user_details = {
-    'admin': {
-        'password': 'admin1234',
-        'isAdmin': true,
-        'phone_no': "98765443210"
-    },
-    'client': {
-        'password': 'client1234',
-        'isAdmin': false,
-        'phone_no': "9876543210" 
-    }
-}
-
 var sessions = {}
 
-var lot_details = {
-    1: {
-        'name': "ACME Parking Lot 1",
-        'location': 'VIT',
-        'spots': {
-            1: {
-                'size': 'small',
-            }
-        }
-    }
-}
-
-/*
-    {
-        bookingID {
-            username: USERNAME,
-            lotID: LOTID,
-            placeID: PLACEID,
-            dateTimeOfBooking: DATE,
-            dateTimeOfExit: DATE
-        }
-    }
-*/
-var bookings = {
-    1: {
-        'username': "client",
-        'lotID': 1,
-        'placeID': 1,
-        'dateTimeOfBooking': new Date()
-    }
-}
-
+// TODO: Add payments to db
 /*
     {
         username: [
@@ -144,27 +113,45 @@ var bookings = {
         ]
     }
 */
-var payments = {}
+// var payments = {}
 
 function generateAuthToken() {
     return Math.random().toString(36).padEnd(15, '0').substring(2, 15) + Math.random().toString(36).padEnd(15, '0').substring(2, 15);
 }
 
-function getCurrentBookings(username) {
-    var currentBookings = []
-    for (var bookingID in bookings) {
-        if(bookings[bookingID]['username'] === username && bookings[bookingID]['dateTimeOfExit'] === undefined) {
-            currentBookings.push({
-                'bookingID': bookingID,
-                'booking_details': bookings[bookingID],
-                'lotID': bookings[bookingID]['lotID'],
-                'lot_details': lot_details[bookings[bookingID]['lotID']],
-                'slotID': bookings[bookingID]['slotID'],
-                'slot_details': lot_details[bookings[bookingID]['lotID']][bookings[bookingID]['slotID']]
-            })
-        }
+function getCurrentBookings(user) {
+    var filters = {
+        'user': user,
+        'dateTimeOfExit': undefined
     }
-    return currentBookings
+
+    return new Promise((resolve, reject) => {
+        db.Booking_Details.find(filters).populate('user')
+        .populate('lot')
+        .populate('spot')
+        .then(currentBookings => {
+            resolve(currentBookings)
+        }).catch(err => reject(err))
+    })
+}
+
+function getCurrentBookingAtLot(user, client) {
+    return new Promise((resolve, reject) => {
+        db.Lot_Details.find({user: user})
+        .then(lots => {
+            var lot = lots[0]
+            return db.Booking_Details.find({
+                'user': client,
+                'dateTimeOfExit': undefined,
+                'lot': lot._id
+            }).populate('user')
+            .populate('lot')
+            .populate('spot')
+            .then(currentBookings => {
+                resolve(currentBookings)
+            }).catch(err => reject(err))
+        })
+    })
 }
 
 app.use((req, res, next) => {
@@ -193,6 +180,7 @@ app.use((req, res, next) => {
                     'message': messages['invalidAuth'],
                     'status': 'invalidAuth'
                 }
+                return res.send(response_body)
             } else {
 
                 response_body = {
@@ -219,17 +207,25 @@ app.use((req, res, next) => {
 })
 
 app.get('/', (req, res) => {
-    if (user_details[sessions[req.body.auth_token]]['isAdmin'])
-        res.send({'allowedEndpoints': authAdminEndpointsList})
-    else
-        res.send({'allowedEndpoints': authClientEndpointsList})
+    res.send({'allowedEndpoints': nonAuthEndpointsList})
 })
 
 app.post('/', (req, res) => {
-    if (user_details[sessions[req.body.auth_token]]['isAdmin'])
-        res.send({'allowedEndpoints': authAdminEndpointsList})
-    else
-        res.send({'allowedEndpoints': authClientEndpointsList})
+    db.User_Details.find({'_id': sessions[req.body.auth_token]})
+    .then(user_details => {
+        switch (user_details[0].role) {
+            case 'admin':
+                res.send({'allowedEndpoints': authAdminEndpointsList})
+                break;
+            case 'terminal': 
+                res.send({'allowedEndpoints': authTerminalEndpointsList})
+                break;
+            case 'client': 
+                res.send({'allowedEndpoints': authClientEndpointsList})
+                break;
+        }
+        res.send({'allowedEndpoints': nonAuthEndpointsList})
+    })
 })
 
 app.post('/registerClient', (req, res) => {
@@ -249,26 +245,34 @@ app.post('/registerClient', (req, res) => {
         const phone_no = result.value.phone_no
 
         var response_body = {}
-        if (username in user_details) {
-            response_body['message'] = messages['userTaken']
-            response_body['status'] = 'userTaken'
-        } else {
-            user_details[username] = {
-                'password': password,
-                'name': name,
-                'isAdmin': false,
-                'phone_no': phone_no
+        db.User_Details.find({'username': username})
+        .then(user_details => {
+            if(user_details[0]) {
+                response_body['message'] = messages['userTaken']
+                response_body['status'] = 'userTaken'
+            } else {
+                response_body['message'] = messages['signupOK']
+                response_body['status'] = 'signupOK'
+                return db.User_Details.create({
+                    'username': username,
+                    'password': password,
+                    'name': name,
+                    'role': "client",
+                    'phone_no': phone_no
+                })
             }
-            response_body['message'] = messages['signupClientOK']
-            response_body['status'] = 'signupClientOK'
-        }
-        res.send(response_body)
+        }).catch((err) => {
+            response_body['message'] = messages['genError']
+            response_body['status'] = 'genError'
+        }).then(() => {
+            res.send(response_body)
+        })
     }
 })
 
-app.post('/registerAdmin', (req, res) => {
+app.post('/registerAuth', (req, res) => {
     // validate body contents
-    const result = joi.validate(req.body, validators['createAdmin'])
+    const result = joi.validate(req.body, validators['signupAuth'])
 
     // check if validation fails 
     if (result.error) {
@@ -278,29 +282,42 @@ app.post('/registerAdmin', (req, res) => {
         })
     } else {
         var response_body = {}
-        if (!user_details[sessions[result.value.auth_token]]['isAdmin']) {
-            response_body['message'] = messages['privError']
-            response_body['status'] = 'privError'
-        } else {
-            const username = result.value.username
-            const password = result.value.password
-            const name = result.value.name
-            
-            if (username in user_details) {
-                response_body['message'] = messages['userTaken']
-                response_body['status'] = 'userTaken'
+        db.User_Details.find({'_id': sessions[result.value.auth_token]})
+        .then(user_details => {
+            if (user_details[0].role !== 'admin') {
+                response_body['message'] = messages['privError']
+                response_body['status'] = 'privError'
             } else {
-                user_details[username] = {
-                    'password': password,
-                    'name': name,
-                    'isAdmin': true
-                }
-                
-                response_body['message'] = messages['signupAdminOK']
-                response_body['status'] = 'signupAdminOK'
+                const username = result.value.username
+                const password = result.value.password
+                const name = result.value.name
+                const role = result.value.role
+                const phone_no = result.value.phone_no
+
+                return db.User_Details.find({'username': username})
+                .then(results => {
+                    if(results[0]) {
+                        response_body['message'] = messages['userTaken']
+                        response_body['status'] = 'userTaken'
+                    } else {
+                        response_body['message'] = messages['signupOK']
+                        response_body['status'] = 'signupOK'
+                        return db.User_Details.create({
+                            'username': username,
+                            'password': password,
+                            'nme': name,
+                            'role': role,
+                            'phone_no': phone_no
+                        })
+                    }
+                })
             }
-        }
-        res.send(response_body)
+        }).catch((err) => {
+            response_body['message'] = messages['genError']
+            response_body['status'] = 'genError'
+        }).then(() => {
+            res.send(response_body)
+        })
     }
 })
 
@@ -318,23 +335,33 @@ app.post('/authenticate', (req, res) => {
         const password = result.value.password
 
         var response_body = {}
-        if (username in user_details) {
-            if (user_details[username].password === password) {
-                response_body['message'] = messages['loginOK']
-                response_body['username'] = username
-                response_body['auth_token'] = generateAuthToken()
-                response_body['status'] = 'loginOK'
-                response_body['isAdmin'] = user_details[username]['isAdmin']
-                sessions[response_body['auth_token']] = username
+
+        db.User_Details.find({'username': username})
+        .then(user_details => {
+            if (user_details[0]) {
+                if (user_details[0].password === password) {
+                    response_body['message'] = messages['loginOK']
+                    response_body['username'] = username
+                    response_body['auth_token'] = generateAuthToken()
+                    response_body['status'] = 'loginOK'
+                    response_body['role'] = user_details[0].role
+                    sessions[response_body['auth_token']] = user_details[0]._id
+                } else {
+                    response_body['message'] = messages['invalidPassword']
+                    response_body['status'] = 'invalidPassword'   
+                }
             } else {
-                response_body['message'] = messages['invalidPassword']
-                response_body['status'] = 'invalidPassword'
+                response_body['message'] = messages['invalidUser']
+                response_body['status'] = 'invalidUser'
             }
-        } else {
-            response_body['message'] = messages['invalidUser']
-            response_body['status'] = 'invalidUser'
-        }
-        res.send(response_body)
+            res.send(response_body)
+        })
+        .catch(err => {
+            res.send({
+                'status': 'genError',
+                'message': messages['genError']
+            })
+        })
     }
 })
 
@@ -364,93 +391,114 @@ app.post('/changePassword', (req, res) => {
         const auth_token = result.value.auth_token
         const newPassword = result.value.newPassword
 
-        user_details[sessions[auth_token]]['password'] = newPassword
-
         var response_body = {}
-        response_body['message'] = messages['pwChangedOK']
-        response_body['status'] = 'pwChangedOK'
-        res.send(response_body)
+        db.User_Details.find({_id: sessions[auth_token]})
+        .then(users => {
+            users[0].password = newPassword
+            return users[0].save()
+        })
+        .then(() => {
+            response_body['message'] = messages['pwChangedOK']
+            response_body['status'] = 'pwChangedOK'
+        })
+        .catch(err => {
+            response_body['message'] = messages['genError']
+            response_body['status'] = 'genError'
+        })
+        .then(() => res.send(response_body))
     }
 })
 
 app.post('/deregisterClient', (req, res) => {
     const auth_token = req.body.auth_token
+    const userID = sessions[auth_token]
+    
     var response_body = {}
-
-    const username = sessions[username]
-
-    if (user_details[username]['isAdmin']) {
-        response_body['message'] = messages['privError']
-        response_body['status'] = 'privError'
-    } else {
-        delete sessions[auth_token]
-        // TODO: Deal with past bookings and payments
-        delete user_details[user_details]
-        
-        response_body['message'] = messages['deregisterOK']
-        response_body['status'] = 'deregisterOK'    
-    }
-    res.send(response_body)
+    db.User_Details.find({_id: userID})
+    .then(users => {
+        var user = users[0]
+        if (user.role === 'client') {
+            response_body['message'] = messages['deregisterOK']
+            response_body['status'] = 'deregisterOK'
+            delete sessions[auth_token]
+            return db.User_Details.deleteOne({_id: user._id})
+        } else {
+            response_body['message'] = messages['privError']
+            response_body['status'] = 'privError'
+        }
+    })
+    .catch(err => {
+        response_body['message'] = messages['genError']
+        response_body['status'] = 'genError'
+    })
+    .then(() => res.send(response_body))
 })
 
 // Client End
 
 app.post('/getBookingDetails', (req, res) => {
     const auth_token = req.body.auth_token
-    var response_body = {}
-
-    const username = sessions[auth_token]
-
-    if (user_details[username]['isAdmin']) {
-        response_body['message'] = messages['privError']
-        response_body['status'] = 'privError'
-    } else {
-        response_body['message'] = messages['opOK']
-        response_body['status'] = 'opOK'
-        
-        
-        const currentBookings = getCurrentBookings(username)
+    const userID = sessions[auth_token]
     
-        response_body['currentBookings'] = currentBookings
-    }
-    res.send(response_body)
+    var response_body = {}
+    db.User_Details.find({_id: userID})
+    .then(users => {
+        var user = users[0]
+        if (user.role === 'client') {
+            response_body['message'] = messages['opOK']
+            response_body['status'] = 'opOK'
+
+            return getCurrentBookings(userID)
+            .then((currentBookings) => {
+                response_body['currentBookings'] = currentBookings
+            })
+        } else {
+            response_body['message'] = messages['privError']
+            response_body['status'] = 'privError'
+        }
+    })
+    .catch(err => {
+        response_body['message'] = messages['genError']
+        response_body['status'] = 'genError'
+    })
+    .then(() => {
+        res.send(response_body)
+    })
 })
 
 app.post('/getPastBookings', (req, res) => {
   const auth_token = req.body.auth_token
+  const userID = sessions[auth_token]
+  
   var response_body= {}
+  db.User_Details.find({_id: userID})
+  .then((users) => {
+    var user = users[0]
+    if (user.role === 'client') {
+        response_body['message'] = messages['opOK']
+        response_body['status'] = 'opOK'
 
-  const username = sessions[auth_token]
-  if (user_details[username]['isAdmin']) {
-    response_body['message'] = messages['privError']
-    response_body['status'] = 'privError'
-  } else {
-    response_body['message'] = messages['opOK']
-    response_body['status'] = 'opOK'
-
-    var pastBookings = []
-    for (var bookingID in bookings) {
-        // THIS WILL GET ALL BOOKINGS, INCLUDING CURRENT ONES
-        if(bookings[bookingID]['username'] === username) {
-            pastBookings.push({
-                'bookingID': bookingID,
-                'booking_details': bookings[bookingID],
-                'lotID': bookings[bookingID]['lotID'],
-                'lot_details': lot_details[bookings[bookingID]['lotID']],
-                'slotID': bookings[bookingID]['slotID'],
-                'slot_details': lot_details[bookings[bookingID]['lotID']][bookings[bookingID]['slotID']]
-            })
-        }
+        return db.Booking_Details.find({user: userID}).populate('lot').populate('spot')
+        .then((bookingDetails) => {
+            response_body['pastBookings'] = bookingDetails
+        })
+    } else {
+        response_body['message'] = messages['privError']
+        response_body['status'] = 'privError'
     }
-    response_body['pastBookings'] = pastBookings
-  }
-  res.send(response_body)
+  })
+  .catch(err => {
+      response_body['message'] = messages['genError']
+      response_body['status'] = 'genError'
+  })
+  .then(() => {
+      res.send(response_body)
+  })
 })
 
 // Operations End
 // getCurrentStatus
 app.post('/getCurrentStatus', (req, res) => {
-    
     var result = joi.validate(req.body, validators['lotRequest'])
     
     if(result.error) {
@@ -460,36 +508,40 @@ app.post('/getCurrentStatus', (req, res) => {
         })
     } else {
         var auth_token = req.body.auth_token
-        var client_username = req.body.client_username
-        var lotID = req.body.lotID
+        var client_auth_token = req.body.client_auth_token
+        var userID = sessions[auth_token]
         
-        if (user_details[sessions[auth_token]]['isAdmin']) {
-            if (client_username in user_details) {
-                // Check if user has any active bookings
-                const currentBookings = getCurrentBookings(client_username)
-                var currentSpots = []
-                for (var i =0 ; i<currentBookings.length; i++) {
-                    if (currentBookings[i]['lotID'] === lotID) {
-                        currentSpots.push(bookings[currentBookings[i]])
+        var response_body = {}
+        db.User_Details.find({_id: userID})
+        .then(users => {
+            var user = users[0]
+            if (user.role === 'terminal') {
+                return db.User_Details.find({_id: sessions[client_auth_token]})
+                .then(clients => {
+                    if(clients.length === 0) {
+                        response_body['message'] = messages['invalidUser']
+                        response_body['status'] = 'invalidUser'
+                    } else {
+                        return getCurrentBookingAtLot(sessions[auth_token], sessions[client_auth_token])
+                        .then(currentSpots => {
+                            response_body['currentSpots'] = currentSpots
+                            response_body['message'] = messages['opOK']
+                            response_body['status'] = 'opOK'
+                        })
                     }
-                }
-                res.send({
-                    'currentSpots': currentSpots,
-                    'status': 'opOK',
-                    'message': messages['opOK']
                 })
             } else {
-                res.send({
-                    'message': messages['invalidUser'],
-                    'status': 'invalidUser'
-                })
+                response_body['message'] = messages['privError']
+                response_body['status'] = 'privError'
             }
-        } else {
-            res.send({
-                'message': messages['privError'],
-                'status': 'privError'
-            })
-        }
+        })
+        .catch(err => {
+            response_body['message'] = messages['genError']
+            response_body['status'] = 'genError'
+        })
+        .then(() => {
+            res.send(response_body)
+        })
     }
 })
 
@@ -513,8 +565,11 @@ app.post('/test', (req, res) => {
     response_body['message'] = messages['authOK']
     response_body['status'] = 'authOK'
     response_body['username'] = sessions[auth_token]
-    
-    res.send(response_body)
+    getCurrentBookingAtLot(sessions[auth_token], sessions[req.body.userTok])
+    .then((currentSpots) => {
+        response_body['currentSpots'] = currentSpots 
+    })
+    .then(() => res.send(response_body))
 })
 
 app.get('*', (req, res) => {
