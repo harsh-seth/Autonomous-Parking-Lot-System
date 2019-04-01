@@ -49,9 +49,10 @@ void loop()
   // Calculating the distance
   distance2 = duration2*0.034/2;
   // Prints the distance on the Serial Monitor
-  Serial.print("Length:");
-  Serial.println(distance1+distance2);
-  Serial.println("AccessToken:"+readString);
+
+  String distance = String(distance1+distance2);
+  String payLoad = (distance + "," + readString);
+  Serial.println(payLoad);
   }
   delay(500);
 
