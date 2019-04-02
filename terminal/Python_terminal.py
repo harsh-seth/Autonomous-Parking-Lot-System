@@ -13,7 +13,7 @@ import requests
 # In[1]:
 
 
-server_url = "http://192.168.137.136:3000"
+server_url = "https://whispering-wildwood-83333.herokuapp.com"
 authenticate_path = "/authenticate"
 post_request_path = "/toggleBooking"
 
