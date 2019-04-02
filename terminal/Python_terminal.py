@@ -1,4 +1,5 @@
 
+
 # coding: utf-8
 
 # In[1]:
@@ -45,7 +46,7 @@ def makeRequestServer(auth_token, client_token, len_class):
 
 
 #The following line is for serial over GPIO
-port = '/dev/ttyACM0'
+port = '/dev/ttyACM1'
 
 sensor_distance = 200
 class_boundaries = [150,165,180,200]
@@ -57,6 +58,7 @@ ard = serial.Serial(port,9600,timeout=5)
 
 
 terminal_token = get_auth_token()
+print("Terminal started at this lot. Listening to all incoming user requests.")
 while (1):  
 	payload = ard.readline()
 	if(payload.decode() != ""):
@@ -65,5 +67,5 @@ while (1):
 		client_auth_token = payload[1]
 		vehicle_width = sensor_distance - measurement
 		length_class = get_class(vehicle_width)
-		print(payload)
+		# print(payload)
 		makeRequestServer(terminal_token, client_auth_token, length_class)
